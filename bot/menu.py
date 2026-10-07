@@ -1,7 +1,7 @@
 import logging
 import re
 
-from telegram import KeyboardButton, ReplyKeyboardMarkup, ReplyKeyboardRemove, Update
+from telegram import ReplyKeyboardRemove, Update
 from telegram.ext import (
     CommandHandler,
     ContextTypes,
@@ -10,59 +10,48 @@ from telegram.ext import (
     filters,
 )
 
-from bot import account, booking, db, labels, manage, panels
+from bot import account, booking, db, labels, manage, panels, payments, roles
+from bot.keyboards import menu_keyboard, phone_keyboard
 from bot.search import begin_search
 
 log = logging.getLogger("uzbekrentalsbot.menu")
 
 NAME, PHONE = range(2)
 
-HELP = (
+HELP_HOST = (
+    "Use the menu buttons below, or these commands:\n"
+    "/start - registration and main menu\n"
+    "/list - post your own listing to the channel\n"
+    "/help - show this message\n\n"
+    "This is the host bot. To rent a place, use the renter bot."
+)
+HELP_RENTER = (
     "Use the menu buttons below, or these commands:\n"
     "/start - registration and main menu\n"
     "/search - find a home or car by city\n"
-    "/list - post your own listing to the channel\n"
-    "/mybookings - your upcoming bookings (needs a linked account)\n"
+    "/mybookings - your bookings and their payment status\n"
     "/myaccount - which Vatan Rentals account is linked to this chat\n"
-    "/help - show this message"
+    "/help - show this message\n\n"
+    "This is the renter bot. To list a place, use the host bot."
 )
-
-
-def _keyboard(rows: list[list[str]]) -> ReplyKeyboardMarkup:
-    return ReplyKeyboardMarkup(rows, resize_keyboard=True, is_persistent=True)
-
-
-def role_keyboard() -> ReplyKeyboardMarkup:
-    return _keyboard([[labels.RENT, labels.HOST]])
-
-
-def menu_keyboard(role: str | None = None) -> ReplyKeyboardMarkup:
-    return _keyboard(
-        [
-            [labels.HOME, labels.SEARCH, labels.POST_LISTING],
-            [labels.MY_BOOKINGS, labels.DELETE, labels.PAYMENTS],
-            [labels.SETTINGS, labels.PROFILE, labels.HELP],
-        ]
-    )
-
-
-def phone_keyboard() -> ReplyKeyboardMarkup:
-    return ReplyKeyboardMarkup(
-        [[KeyboardButton("Share my phone number", request_contact=True)]],
-        resize_keyboard=True,
-        one_time_keyboard=True,
-    )
-
-
-async def ask_role(update: Update) -> None:
-    await update.message.reply_text("Do you want to rent or host?", reply_markup=role_keyboard())
+HELP = HELP_HOST if roles.is_host() else HELP_RENTER
 
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     # Deep link from a channel card: t.me/<bot>?start=book_<listing id>
     arg = context.args[0] if context.args else ""
     if arg.startswith("book_") and arg[5:].isdigit():
-        await booking.start_booking(update.message, int(arg[5:]))
+        if roles.is_host():
+            await update.message.reply_text("To book a place, please open the renter bot from the channel card.")
+        elif db.get_user(update.effective_chat.id) is None:
+            context.user_data["pending_book"] = int(arg[5:])
+            await update.message.reply_text(
+                "Welcome to Uzbek Rentals! Let's get you registered first. What's your name?",
+                reply_markup=ReplyKeyboardRemove(),
+            )
+            return NAME
+        else:
+            await booking.start_booking(update.message, int(arg[5:]))
         return ConversationHandler.END
 
     user = db.get_user(update.effective_chat.id)
@@ -72,12 +61,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
             reply_markup=ReplyKeyboardRemove(),
         )
         return NAME
-    if user["role"] is None:
-        await ask_role(update)
-    else:
-        await update.message.reply_text(
-            f"Welcome back, {user['name']}!", reply_markup=menu_keyboard()
-        )
+    await update.message.reply_text(f"Welcome back, {user['name']}!", reply_markup=menu_keyboard())
     return ConversationHandler.END
 
 
@@ -104,8 +88,17 @@ async def got_contact(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int
     name = context.user_data.pop("reg_name", None) or update.effective_user.full_name
     phone = contact.phone_number if contact.phone_number.startswith("+") else f"+{contact.phone_number}"
     db.save_user(update.effective_chat.id, name, phone)
-    await update.message.reply_text(f"Welcome, {name}! You're registered.")
-    await ask_role(update)
+    hint = (
+        "Tap Post to list a place: photo, location, price, information and a contact number. "
+        "Then add your payment card in Settings so renters can pay you. "
+        "It will appear in our channel, where renters can book it."
+        if roles.is_host()
+        else "Use Search to find a place, or open a channel card to book one."
+    )
+    await update.message.reply_text(f"Welcome, {name}! You're registered as a {roles.title().lower()}.\n{hint}", reply_markup=menu_keyboard())
+    pending = context.user_data.pop("pending_book", None)
+    if pending is not None:
+        await booking.start_booking(update.message, pending)
     return ConversationHandler.END
 
 
@@ -146,20 +139,6 @@ async def _require_registration(update: Update) -> bool:
     return True
 
 
-async def on_role(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    if not await _require_registration(update):
-        return
-    role = "host" if update.message.text == labels.HOST else "renter"
-    db.set_role(update.effective_chat.id, role)
-    text = (
-        "Great! As a host you can tap Post to list a place (photo, location, phone number and price); "
-        "it will appear in our channel, where renters can book it."
-        if role == "host"
-        else "Great! Tap Search to find a place, or Post if you want to list one."
-    )
-    await update.message.reply_text(text, reply_markup=menu_keyboard())
-
-
 def _guarded(handler):
     """Wrap a menu action so unregistered users are sent to /start first."""
 
@@ -194,17 +173,21 @@ def _label(text: str) -> filters.BaseFilter:
     return filters.Regex(f"^{re.escape(text)}$")
 
 
-handlers = [
-    MessageHandler(_label(labels.RENT) | _label(labels.HOST), on_role),
+_common = [
     MessageHandler(_label(labels.HOME), _guarded(panels.home)),
+        MessageHandler(_label(labels.SETTINGS), _guarded(panels.settings)),
+    MessageHandler(_label(labels.PROFILE), _guarded(panels.profile)),
+]
+_host_only = [
+    MessageHandler(_label(labels.DELETE), _guarded(manage.show_listings)),
+    MessageHandler(_label(labels.PAYMENTS), _guarded(panels.payments_panel)),
+]
+_renter_only = [
     MessageHandler(_label(labels.SEARCH), _guarded(on_search)),
     MessageHandler(_label(labels.MY_BOOKINGS), _guarded(on_bookings)),
-    MessageHandler(_label(labels.DELETE), _guarded(manage.show_listings)),
-    MessageHandler(_label(labels.PAYMENTS), _guarded(panels.payments)),
-    MessageHandler(_label(labels.SETTINGS), _guarded(panels.settings)),
-    MessageHandler(_label(labels.PROFILE), _guarded(panels.profile)),
-    MessageHandler(_label(labels.HELP), on_help),
+    MessageHandler(_label(labels.MAKE_PAYMENT), _guarded(payments.make_payment)),
 ]
+handlers = _common + (_host_only if roles.is_host() else _renter_only)
 
 # Registered last: anything typed that nothing else wanted.
 fallback = MessageHandler(filters.TEXT & ~filters.COMMAND, on_other_text)

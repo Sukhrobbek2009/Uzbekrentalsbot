@@ -129,11 +129,11 @@ def _where(city_key: str) -> str:
 def nav_keyboard(listing_type: str, city_key: str, page: int, total: int) -> InlineKeyboardMarkup:
     row = []
     if page > 1:
-        row.append(InlineKeyboardButton("\u2190 Back", callback_data=f"pg:{listing_type}:{city_key}:{page - 1}"))
+        row.append(InlineKeyboardButton("\u25C0\uFE0F Back", callback_data=f"pg:{listing_type}:{city_key}:{page - 1}"))
     if page * RESULT_LIMIT < total:
-        row.append(InlineKeyboardButton(f"Next {RESULT_LIMIT} \u2192", callback_data=f"pg:{listing_type}:{city_key}:{page + 1}"))
+        row.append(InlineKeyboardButton(f"Next {RESULT_LIMIT} \u25B6\uFE0F", callback_data=f"pg:{listing_type}:{city_key}:{page + 1}"))
     rows = [row] if row else []
-    rows.append([InlineKeyboardButton("New search", callback_data="search")])
+    rows.append([InlineKeyboardButton("\U0001F50D New search", callback_data="search")])
     return InlineKeyboardMarkup(rows)
 
 
@@ -182,8 +182,8 @@ async def send_results(message: Message, listing_type: str, city_key: str, page:
         use_button = _public_https(page_url)
         row = []
         if use_button:
-            row.append(InlineKeyboardButton("View on site", url=page_url))
-        row.append(InlineKeyboardButton("Book this", callback_data=f"book:{listing['id']}"))
+            row.append(InlineKeyboardButton("\U0001F310 View on site", url=page_url))
+        row.append(InlineKeyboardButton("\U0001F511 Book this", callback_data=f"book:{listing['id']}"))
         markup = InlineKeyboardMarkup([row])
         caption = format_listing(listing, page_url, link_in_text=not use_button)
         photo = _photo_url(listing)
@@ -239,7 +239,8 @@ async def on_book(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     await query.answer()
     listing_id = query.data.split(":", 1)[1]
     log.info("Book requested for listing %s", listing_id)
-    await query.message.reply_text("Booking from Telegram is coming soon. For now, use \"View on site\" to book.")
+    await query.message.reply_text("Booking website listings from Telegram needs a linked Vatan Rentals account, which isn't set up yet. "
+        "For now use \"View on site\" to book, or book a place from the channel.")
 
 
 handlers = [

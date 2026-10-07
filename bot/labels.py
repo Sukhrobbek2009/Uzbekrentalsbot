@@ -1,16 +1,15 @@
 import re
 
-HOME = "Home"
-SEARCH = "Search"
-POST_LISTING = "Post"
-MY_BOOKINGS = "My bookings"
-DELETE = "Delete"
-PAYMENTS = "Payments"
-SETTINGS = "Settings"
-PROFILE = "Profile"
-HELP = "Help"
-RENT = "I want to rent"
-HOST = "I want to host"
+HOME = "\U0001F3E0 Home"
+SEARCH = "\U0001F50D Search"
+POST_LISTING = "\U0001F4DD Post"
+MY_BOOKINGS = "\U0001F4C5 My bookings"
+DELETE = "\U0001F5D1 Delete"
+PAYMENTS = "\U0001F4B3 Payments"
+MAKE_PAYMENT = "\U0001F4B0 Make payment"
+SETTINGS = "\u2699\ufe0f Settings"
+PROFILE = "\U0001F464 Profile"
+HELP = "\u2753 Help"
 
-MENU_LABELS = [HOME, SEARCH, POST_LISTING, MY_BOOKINGS, DELETE, PAYMENTS, SETTINGS, PROFILE, HELP, RENT, HOST]
+MENU_LABELS = [HOME, SEARCH, POST_LISTING, MY_BOOKINGS, DELETE, PAYMENTS, MAKE_PAYMENT, SETTINGS, PROFILE, HELP]
 MENU_REGEX = "^(" + "|".join(re.escape(label) for label in MENU_LABELS) + ")$"

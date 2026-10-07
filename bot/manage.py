@@ -7,7 +7,7 @@ from telegram.constants import ParseMode
 from telegram.error import TelegramError
 from telegram.ext import CallbackQueryHandler, ContextTypes
 
-from bot import db
+from bot import db, roles
 from bot.listing_flow import book_markup, caption_for, channel_id
 
 log = logging.getLogger("uzbekrentalsbot.manage")
@@ -16,17 +16,17 @@ NO_MARKUP = InlineKeyboardMarkup([])
 
 
 def card_text(listing) -> str:
-    state = "Active" if listing["status"] == "active" else "Inactive (hidden from renters)"
-    return f"{listing['location']}\n${listing['price']:g} per night\nStatus: {state}"
+    state = "\U0001F7E2 Active" if listing["status"] == "active" else "\u23F8 Inactive (hidden from renters)"
+    return f"\U0001F4CD {listing['location']}\n\U0001F4B5 ${listing['price']:g} per night\n{state}"
 
 
 def card_markup(listing) -> InlineKeyboardMarkup:
     first = (
-        InlineKeyboardButton("Deactivate", callback_data=f"mg:off:{listing['id']}")
+        InlineKeyboardButton("\u23F8 Deactivate", callback_data=f"mg:off:{listing['id']}")
         if listing["status"] == "active"
-        else InlineKeyboardButton("Reactivate", callback_data=f"mg:on:{listing['id']}")
+        else InlineKeyboardButton("\u25B6\uFE0F Reactivate", callback_data=f"mg:on:{listing['id']}")
     )
-    return InlineKeyboardMarkup([[first, InlineKeyboardButton("Delete", callback_data=f"mg:del:{listing['id']}")]])
+    return InlineKeyboardMarkup([[first, InlineKeyboardButton("\U0001F5D1 Delete", callback_data=f"mg:del:{listing['id']}")]])
 
 
 async def sync_channel(context: ContextTypes.DEFAULT_TYPE, listing, state: str) -> bool:
@@ -51,7 +51,7 @@ async def sync_channel(context: ContextTypes.DEFAULT_TYPE, listing, state: str) 
                 message_id,
                 caption=caption_for(listing),
                 parse_mode=ParseMode.HTML,
-                reply_markup=book_markup(context.bot.username, listing["id"]),
+                reply_markup=book_markup(roles.booking_bot_username(context.bot), listing["id"]),
             )
         return True
     except TelegramError as e:
@@ -92,8 +92,8 @@ async def on_manage(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         await query.edit_message_caption(
             caption=f"Delete {listing['location']}? It will be removed from the channel and can't be undone.",
             reply_markup=InlineKeyboardMarkup(
-                [[InlineKeyboardButton("Yes, delete", callback_data=f"mg:yes:{lid}"),
-                  InlineKeyboardButton("Cancel", callback_data=f"mg:no:{lid}")]]
+                [[InlineKeyboardButton("\u2705 Yes, delete", callback_data=f"mg:yes:{lid}"),
+                  InlineKeyboardButton("\u2716\uFE0F Cancel", callback_data=f"mg:no:{lid}")]]
             ),
         )
     elif action == "no":

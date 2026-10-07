@@ -7,7 +7,7 @@ from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Message, Update
 from telegram.constants import ParseMode
 from telegram.ext import CallbackQueryHandler, CommandHandler, ContextTypes
 
-from bot import db
+from bot import db, payments, reviews
 from bot.api_client import LinkExpired, NotLinked, authed_get
 
 log = logging.getLogger("uzbekrentalsbot.account")
@@ -42,34 +42,32 @@ def upcoming(bookings: list[dict], today: dt.date | None = None) -> list[dict]:
 
 
 async def show_bookings(message: Message) -> None:
-    try:
-        bookings = await authed_get(message.chat_id, "/api/bookings/mine")
-    except NotLinked:
+    """Channel bookings made in this bot (with payment status), plus website ones if an account is linked."""
+    sections = []
+    rows = db.renter_bookings(message.chat_id, dt.date.today().isoformat())
+    if rows:
+        sections.append("\U0001F4CC <b>Bookings from the channel</b>\n\n" + "\n\n".join(payments.booking_lines(rows[:MAX_SHOWN])))
+    if db.get_link(message.chat_id) is not None:
+        try:
+            items = upcoming(await authed_get(message.chat_id, "/api/bookings/mine"))
+        except (NotLinked, LinkExpired):
+            items = []
+        except httpx.HTTPError as e:
+            log.error("Could not load website bookings: %s %s", e.__class__.__name__, e)
+            items = []
+        if items:
+            sections.append("\U0001F310 <b>Website bookings</b>\n\n" + "\n\n".join(format_booking(b) for b in items[:MAX_SHOWN]))
+    to_review = db.reviewable_bookings(message.chat_id, dt.date.today().isoformat())
+    if not sections and not to_review:
+        await message.reply_text("\U0001F4ED You have no upcoming bookings. Pick a place from the channel to book one.")
+        return
+    if sections:
+        await message.reply_text("\n\n".join(sections), parse_mode=ParseMode.HTML)
+    if to_review:
         await message.reply_text(
-            "Link your Vatan Rentals account first to see your bookings.", reply_markup=LINK_PROMPT
+            "\u2B50 How were your stays? Tap one to leave a review:",
+            reply_markup=InlineKeyboardMarkup(reviews.review_buttons(to_review)),
         )
-        return
-    except LinkExpired:
-        await message.reply_text(
-            "Your account link has expired. Please link your account again.", reply_markup=LINK_PROMPT
-        )
-        return
-    except httpx.HTTPError as e:
-        log.error("Could not load bookings: %s %s", e.__class__.__name__, e)
-        await message.reply_text("Sorry, I couldn't load your bookings right now. Please try again later.")
-        return
-
-    items = upcoming(bookings)
-    if not items:
-        await message.reply_text("You have no upcoming bookings. Use /search to find a place.")
-        return
-    lines = [format_booking(b) for b in items[:MAX_SHOWN]]
-    extra = len(items) - MAX_SHOWN
-    if extra > 0:
-        lines.append(f"...and {extra} more on the website.")
-    await message.reply_text(
-        "Your upcoming bookings:\n\n" + "\n\n".join(lines), parse_mode=ParseMode.HTML
-    )
 
 
 async def mybookings_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:

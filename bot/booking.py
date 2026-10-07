@@ -3,18 +3,15 @@ import html
 import logging
 import os
 
-from telegram import InlineKeyboardButton, InlineKeyboardMarkup, LabeledPrice, Message, Update
+from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Message, Update
 from telegram.constants import ParseMode
 from telegram.error import TelegramError
 from telegram.ext import (
     CallbackQueryHandler,
     ContextTypes,
-    MessageHandler,
-    PreCheckoutQueryHandler,
-    filters,
 )
 
-from bot import db
+from bot import db, payments, roles
 from bot.listing_flow import caption_for
 
 log = logging.getLogger("uzbekrentalsbot.booking")
@@ -34,10 +31,6 @@ def down_payment_percent() -> float:
         return 20.0
 
 
-def provider_token() -> str | None:
-    return os.environ.get("PAYMENT_PROVIDER_TOKEN", "").strip() or None
-
-
 def down_payment_minor(price: float) -> int:
     return round(price * down_payment_percent())  # price * pct/100 dollars * 100 cents
 
@@ -49,7 +42,9 @@ def day_keyboard(listing_id: int) -> InlineKeyboardMarkup:
         InlineKeyboardButton(d.strftime("%a %d %b"), callback_data=f"bk:d:{listing_id}:{d.isoformat()}")
         for d in days
     ]
-    return InlineKeyboardMarkup([buttons[i : i + 2] for i in range(0, len(buttons), 2)])
+    rows = [buttons[i : i + 2] for i in range(0, len(buttons), 2)]
+    rows.append([payments.ask_host_button(listing_id)])
+    return InlineKeyboardMarkup(rows)
 
 
 def slot_keyboard(listing_id: int, day: str) -> InlineKeyboardMarkup | None:
@@ -69,10 +64,39 @@ async def start_booking(message: Message, listing_id: int) -> None:
     if listing["status"] != "active":
         await message.reply_text("Sorry, that listing is not available right now.")
         return
-    await message.reply_photo(listing["photo_file_id"], caption=caption_for(listing), parse_mode=ParseMode.HTML)
+    owner = db.get_user(listing["owner_chat_id"])
+    if owner is None or not owner["card_number"]:
+        await message.reply_text("\U0001F6AB The host hasn't set up payment details yet. Please try again later.")
+        return
+    await _show_card(message, listing)
     await message.reply_text(
-        "Pick a day for your visit / pick-up:", reply_markup=day_keyboard(listing_id)
+        "\U0001F4C5 Pick a day for your visit / pick-up:", reply_markup=day_keyboard(listing_id)
     )
+
+
+async def _show_card(message: Message, listing) -> None:
+    """Show the listing's photo and details. Never blocks the booking if the photo can't be shown.
+
+    Telegram file ids only work for the bot that received the photo. Listings are posted through
+    the host bot, so the renter bot fetches the image through it once and keeps its own file id.
+    """
+    caption = caption_for(listing)
+    photo = listing["renter_photo_file_id"]
+    try:
+        if photo is None:
+            host = roles.host_bot()
+            if host is not None:
+                async with host:
+                    file = await host.get_file(listing["photo_file_id"])
+                    photo = bytes(await file.download_as_bytearray())
+        if photo is not None:
+            sent = await message.reply_photo(photo, caption=caption, parse_mode=ParseMode.HTML)
+            if listing["renter_photo_file_id"] is None:
+                db.set_renter_photo(listing["id"], sent.photo[-1].file_id)
+            return
+    except TelegramError as e:
+        log.error("Could not show the photo of listing %s: %s", listing["id"], e)
+    await message.reply_text(caption, parse_mode=ParseMode.HTML)
 
 
 async def on_day(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -95,94 +119,103 @@ def _valid_day(day: str) -> bool:
     return today <= d <= today + dt.timedelta(days=DAYS_AHEAD)
 
 
+def _check_choice(listing_id: int, day: str, slot: str):
+    """(listing, owner, problem) for a day and time the renter picked; problem is None if it's bookable."""
+    listing = db.get_listing(listing_id)
+    if listing is None or listing["status"] != "active" or slot not in SLOTS or not _valid_day(day):
+        return listing, None, "Sorry, that option is no longer valid. Open the listing again from the channel."
+    owner = db.get_user(listing["owner_chat_id"])
+    if owner is None or not owner["card_number"]:
+        return listing, owner, "\U0001F6AB The host hasn't set up payment details yet. Please try again later."
+    return listing, owner, None
+
+
 async def on_time(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """The renter picked a time: ask them to confirm before anything is booked."""
     query = update.callback_query
     await query.answer()
     _, _, lid, day, hour = query.data.split(":", 4)
     listing_id, slot = int(lid), f"{hour}:00"
-    listing = db.get_listing(listing_id)
-    if listing is None or listing["status"] != "active" or slot not in SLOTS or not _valid_day(day):
-        await query.edit_message_text("Sorry, that option is no longer valid. Open the listing again from the channel.")
+    listing, _, problem = _check_choice(listing_id, day, slot)
+    if problem:
+        await query.edit_message_text(problem)
         return
     if slot in db.taken_slots(listing_id, day):
         await query.edit_message_text("Sorry, that time was just taken. Pick another:", reply_markup=slot_keyboard(listing_id, day) or day_keyboard(listing_id))
         return
-    token = provider_token()
-    if not token:
-        await query.edit_message_text("Payments aren't set up yet, so I can't take a down payment right now.")
-        return
-
     amount = down_payment_minor(listing["price"])
-    booking_id = db.create_booking(listing_id, query.message.chat_id, day, slot, amount, currency())
-    await query.edit_message_text(f"Booking {day} at {slot}. Please pay the down payment below to confirm.")
-    try:
-        await context.bot.send_invoice(
-            chat_id=query.message.chat_id,
-            title="Down payment",
-            description=f"{down_payment_percent():g}% down payment for {listing['location']} on {day} at {slot}"[:255],
-            payload=f"booking:{booking_id}",
-            provider_token=token,
-            currency=currency(),
-            prices=[LabeledPrice(f"Down payment ({down_payment_percent():g}%)", amount)],
-        )
-    except TelegramError as e:
-        log.error("Could not send invoice for booking %s: %s", booking_id, e)
-        await query.message.reply_text("Sorry, I couldn't create the payment. Please try again later.")
-
-
-async def on_precheckout(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    q = update.pre_checkout_query
-    booking = None
-    if q.invoice_payload.startswith("booking:") and q.invoice_payload[8:].isdigit():
-        booking = db.get_booking(int(q.invoice_payload[8:]))
-    if booking is None or booking["status"] != "pending_payment":
-        await q.answer(ok=False, error_message="This booking is no longer valid. Please start again.")
-        return
-    if q.total_amount != booking["amount_minor"] or q.currency != booking["currency"]:
-        await q.answer(ok=False, error_message="The amount changed. Please start again.")
-        return
-    if booking["slot"] in db.taken_slots(booking["listing_id"], booking["day"]):
-        await q.answer(ok=False, error_message="Sorry, that time was just taken.")
-        return
-    await q.answer(ok=True)
-
-
-async def on_paid(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    payment = update.message.successful_payment
-    booking = db.get_booking(int(payment.invoice_payload.split(":", 1)[1]))
-    if booking is None:
-        log.error("Payment %s received for unknown booking", payment.telegram_payment_charge_id)
-        return
-    if not db.confirm_booking(booking["id"], payment.telegram_payment_charge_id):
-        log.error("Booking %s slot conflict after payment; needs refund (charge %s)", booking["id"], payment.telegram_payment_charge_id)
-        await update.message.reply_text(
-            "Sorry, someone else just booked that time. Your payment will be refunded; please pick another time."
-        )
-        return
-    listing = db.get_listing(booking["listing_id"])
-    await update.message.reply_text(
-        f"Booked! {booking['day']} at {booking['slot']} - {listing['location']}.\n"
-        f"Contact the owner: {listing['phone']}"
+    await query.edit_message_text(
+        "\U0001F4CB <b>Please confirm your booking</b>\n\n"
+        f"\U0001F4CD {html.escape(listing['location'])}\n"
+        f"\U0001F4C5 {day} at {slot}\n"
+        f"\U0001F4B5 Price: ${listing['price']:g} per night\n"
+        f"\U0001F4B3 Down payment now: <b>{amount / 100:.2f} {currency()}</b> ({down_payment_percent():g}%)",
+        parse_mode=ParseMode.HTML,
+        reply_markup=InlineKeyboardMarkup(
+            [
+                [
+                    InlineKeyboardButton("\u2705 Confirm booking", callback_data=f"bk:c:{listing_id}:{day}:{hour}"),
+                    InlineKeyboardButton("\u2716\uFE0F Cancel", callback_data="bk:x"),
+                ],
+                [payments.ask_host_button(listing_id)],
+            ]
+        ),
     )
-    user = update.effective_user
-    who = html.escape(user.full_name) + (f" (@{html.escape(user.username)})" if user.username else "")
-    owner = db.get_user(listing["owner_chat_id"])
-    if owner is not None and not owner["notify"]:
+
+
+async def on_cancel(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    query = update.callback_query
+    await query.answer()
+    await query.edit_message_text("Booking cancelled. Tap Book this on a channel card whenever you're ready.")
+
+
+async def on_confirm(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    query = update.callback_query
+    await query.answer()
+    _, _, lid, day, hour = query.data.split(":", 4)
+    listing_id, slot = int(lid), f"{hour}:00"
+    listing, owner, problem = _check_choice(listing_id, day, slot)
+    if problem:
+        await query.edit_message_text(problem)
         return
-    try:
-        await context.bot.send_message(
-            listing["owner_chat_id"],
-            f"New booking for {html.escape(listing['location'])}: {booking['day']} at {booking['slot']} by {who}. "
-            f"Down payment received: {booking['amount_minor'] / 100:.2f} {booking['currency']}.",
-            parse_mode=ParseMode.HTML,
+    if slot in db.taken_slots(listing_id, day):
+        await query.edit_message_text("Sorry, that time was just taken. Pick another:", reply_markup=slot_keyboard(listing_id, day) or day_keyboard(listing_id))
+        return
+
+    chat_id = query.message.chat_id
+    amount = down_payment_minor(listing["price"])
+    booking_id = db.create_booking(listing_id, chat_id, day, slot, amount, currency())
+    b = db.booking_with_listing(booking_id)
+    await query.edit_message_text(
+        "\U0001F389 <b>Booked!</b> Your time is saved. It becomes final once the host accepts your payment.\n\n"
+        + payments.instructions(b, owner),
+        parse_mode=ParseMode.HTML,
+        reply_markup=InlineKeyboardMarkup(
+            [
+                [InlineKeyboardButton("\U0001F4F8 Send payment screenshot", callback_data=f"pay:{booking_id}")],
+                [payments.ask_host_button(listing_id)],
+            ]
+        ),
+    )
+    if owner["notify"]:
+        renter = db.get_user(chat_id)
+        name = html.escape(renter["name"]) if renter else "A renter"
+        await payments.notify_host(
+            owner["chat_id"],
+            f"\U0001F514 <b>New booking!</b>\n"
+            f"\U0001F4CD {html.escape(listing['location'])}\n"
+            f"\U0001F4C5 {day} at {slot}\n"
+            f"\U0001F464 {name}" + (f" ({html.escape(renter['phone'])})" if renter else "") + "\n"
+            f"\U0001F4B5 Down payment expected: {amount / 100:.2f} {currency()}\n\n"
+            "I'll send you the payment screenshot to review as soon as the renter uploads it.",
+            InlineKeyboardMarkup([[payments.message_renter_button(listing_id, chat_id)]]),
         )
-    except TelegramError as e:
-        log.error("Could not notify owner of booking %s: %s", booking["id"], e)
 
 
 handlers = [
+    payments.pay_conversation,
     CallbackQueryHandler(on_day, pattern=r"^bk:d:\d+:\d{4}-\d{2}-\d{2}$"),
     CallbackQueryHandler(on_time, pattern=r"^bk:t:\d+:\d{4}-\d{2}-\d{2}:\d{2}$"),
-    PreCheckoutQueryHandler(on_precheckout),
-    MessageHandler(filters.SUCCESSFUL_PAYMENT, on_paid),
+    CallbackQueryHandler(on_confirm, pattern=r"^bk:c:\d+:\d{4}-\d{2}-\d{2}:\d{2}$"),
+    CallbackQueryHandler(on_cancel, pattern=r"^bk:x$"),
 ]

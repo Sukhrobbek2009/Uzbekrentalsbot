@@ -4,7 +4,7 @@ import sys
 
 from telegram import Update
 from bot.api_client import check_health
-from bot import account, booking, db, listing_flow, manage, menu, panels
+from bot import account, booking, chat, db, listing_flow, manage, menu, panels, payments, reviews, roles
 from bot.logging_setup import setup_logging
 from bot.search import handlers as search_handlers
 from telegram.ext import (
@@ -49,12 +49,7 @@ async def on_startup(app: Application) -> None:
     await check_health()
 
 
-def main() -> None:
-    token = os.environ.get("BOT_TOKEN")
-    if not token:
-        sys.exit("BOT_TOKEN environment variable is not set.")
-    setup_logging(token, os.environ.get("PAYMENT_PROVIDER_TOKEN"))
-
+def build_app(token: str) -> Application:
     app = (
         Application.builder()
         .token(token)
@@ -66,21 +61,35 @@ def main() -> None:
     app.add_handler(TypeHandler(Update, log_update), group=-1)
     app.add_handler(menu.registration)
     app.add_handler(CommandHandler("help", help_command))
-    app.add_handler(listing_flow.conversation)
+    # Conversations come before the menu buttons, so tapping a menu button during one
+    # ends it (its fallback) instead of running the button and leaving the conversation open.
+    if roles.is_host():
+        app.add_handler(listing_flow.conversation)
+        app.add_handler(chat.host_conversation)
+        for handler in manage.handlers + payments.host_handlers:
+            app.add_handler(handler)
+    else:
+        app.add_handler(reviews.conversation)
+        app.add_handler(chat.renter_conversation)
+        for handler in account.handlers + booking.handlers + search_handlers:
+            app.add_handler(handler)
+    for handler in panels.handlers:
+        app.add_handler(handler)
     for handler in menu.handlers:
-        app.add_handler(handler)
-    for handler in manage.handlers + panels.handlers:
-        app.add_handler(handler)
-    for handler in account.handlers:
-        app.add_handler(handler)
-    for handler in booking.handlers:
-        app.add_handler(handler)
-    for handler in search_handlers:
         app.add_handler(handler)
     app.add_handler(CallbackQueryHandler(on_button))
     app.add_handler(menu.fallback)
-    log.info("Starting polling...")
-    app.run_polling(allowed_updates=Update.ALL_TYPES)
+    return app
+
+
+def main() -> None:
+    token = os.environ.get("BOT_TOKEN")
+    if not token:
+        sys.exit("BOT_TOKEN environment variable is not set.")
+    setup_logging(token, os.environ.get("HOST_BOT_TOKEN"), os.environ.get("RENTER_BOT_TOKEN"))
+    app = build_app(token)
+    log.info("Starting polling as the %s bot...", roles.ROLE)
+    app.run_polling(allowed_updates=Update.ALL_TYPES, bootstrap_retries=-1)
 
 
 if __name__ == "__main__":
