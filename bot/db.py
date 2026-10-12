@@ -419,3 +419,35 @@ def recent_renter_messages(renter_chat_id: int, minutes: int = 60) -> int:
             " AND created_at >= datetime('now', ?)",
             (renter_chat_id, f"-{minutes} minutes"),
         ).fetchone()[0]
+
+
+def recent_reviews(listing_id: int, limit: int = 10) -> list[sqlite3.Row]:
+    with closing(_connect()) as conn:
+        return conn.execute(
+            "SELECT r.*, u.name FROM reviews r LEFT JOIN bot_users u ON u.chat_id = r.renter_chat_id"
+            " WHERE r.listing_id = ? ORDER BY r.id DESC LIMIT ?",
+            (listing_id, limit),
+        ).fetchall()
+
+
+def reviewable_for_listing(chat_id: int, listing_id: int, today: str) -> list[sqlite3.Row]:
+    return [b for b in reviewable_bookings(chat_id, today) if b["listing_id"] == listing_id]
+
+
+def active_channel_listings() -> list[sqlite3.Row]:
+    with closing(_connect()) as conn:
+        return conn.execute(
+            "SELECT * FROM listings WHERE status = 'active' AND channel_message_id IS NOT NULL ORDER BY id"
+        ).fetchall()
+
+
+_EDITABLE = {"price", "location", "description", "phone", "photo_file_id", "latitude", "longitude", "renter_photo_file_id"}
+
+
+def update_listing(listing_id: int, **fields) -> None:
+    """Change some columns of a listing (only the ones hosts may edit)."""
+    if not fields or not set(fields) <= _EDITABLE:
+        raise ValueError(f"cannot edit {sorted(set(fields) - _EDITABLE)}")
+    assignments = ", ".join(f"{name} = ?" for name in fields)
+    with closing(_connect()) as conn, conn:
+        conn.execute(f"UPDATE listings SET {assignments} WHERE id = ?", (*fields.values(), listing_id))

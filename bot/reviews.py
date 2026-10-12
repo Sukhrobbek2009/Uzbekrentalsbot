@@ -97,6 +97,29 @@ async def got_comment(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int
     return ConversationHandler.END
 
 
+async def show_reviews(message, listing_id: int) -> None:
+    """All reviews of a listing (opened from the channel card's Reviews button)."""
+    listing = db.get_listing(listing_id)
+    if listing is None or listing["status"] == "deleted":
+        await message.reply_text("Sorry, that listing no longer exists.")
+        return
+    average, count = db.review_stats(listing_id)
+    head = f"\U0001F4CD <b>{html.escape(listing['location'])}</b>\n"
+    if not count:
+        head += "No reviews yet."
+    else:
+        head += f"{'\u2B50' * round(average)} <b>{average:.1f}</b> ({count} review{'s' if count != 1 else ''})\n"
+    lines = [
+        f"\n{'\u2B50' * r['rating']} {html.escape(r['name'].split()[0] if r['name'] else 'A renter')}"
+        + (f"\n\U0001F4AC {html.escape(r['comment'])}" if r["comment"] else "")
+        for r in db.recent_reviews(listing_id, 10)
+    ]
+    mine = db.reviewable_for_listing(message.chat_id, listing_id, dt.date.today().isoformat())
+    markup = InlineKeyboardMarkup(review_buttons(mine)) if mine else None
+    note = "" if mine else "\n\nOnly renters with a finished booking can leave a review."
+    await message.reply_text(head + "\n".join(lines) + note, parse_mode=ParseMode.HTML, reply_markup=markup)
+
+
 async def refresh_channel_card(listing_id: int, renter_bot_username: str) -> bool:
     """Edit the channel card so it shows the latest rating. The host bot is the channel admin."""
     listing = db.get_listing(listing_id)
@@ -124,6 +147,7 @@ async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
 
 conversation = ConversationHandler(
     entry_points=[CallbackQueryHandler(begin, pattern=r"^rt:\d+$")],
+    allow_reentry=True,
     states={
         RATING: [CallbackQueryHandler(got_rating, pattern=r"^rs:[1-5]$")],
         COMMENT: [MessageHandler(text_only, got_comment)],

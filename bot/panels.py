@@ -158,6 +158,7 @@ async def card_cancel(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int
 
 card_conversation = ConversationHandler(
     entry_points=[CallbackQueryHandler(card_start, pattern=r"^st:card$")],
+    allow_reentry=True,
     states={
         CARD_NUMBER: [MessageHandler(text_only, card_number)],
         CARD_HOLDER: [MessageHandler(text_only, card_holder)],
@@ -242,6 +243,7 @@ async def edit_cancel(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int
 
 edit_conversation = ConversationHandler(
     entry_points=[CallbackQueryHandler(edit_start, pattern=r"^pf:(name|phone)$")],
+    allow_reentry=True,
     states={
         EDIT_NAME: [MessageHandler(text_only, edit_name)],
         EDIT_PHONE: [MessageHandler(filters.CONTACT | text_only, edit_phone)],

@@ -1,10 +1,12 @@
+import asyncio
 import logging
 import os
 import sys
 
 from telegram import Update
+from telegram.error import TelegramError
 from bot.api_client import check_health
-from bot import account, booking, chat, db, listing_flow, manage, menu, panels, payments, reviews, roles
+from bot import account, booking, chat, db, edit_post, listing_flow, manage, menu, panels, payments, reviews, roles
 from bot.logging_setup import setup_logging
 from bot.search import handlers as search_handlers
 from telegram.ext import (
@@ -44,9 +46,32 @@ async def log_update(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
         log.info("forwarded from channel/chat id %s", origin_chat.id)
 
 
+async def refresh_cards(app: Application) -> None:
+    """Re-edit active channel cards so older posts pick up new buttons and the rating line."""
+    chat = listing_flow.channel_id()
+    if not chat:
+        return
+    name = roles.booking_bot_username(app.bot)
+    for listing in db.active_channel_listings():
+        try:
+            await app.bot.edit_message_caption(
+                chat,
+                listing["channel_message_id"],
+                caption=listing_flow.caption_for(listing),
+                parse_mode="HTML",
+                reply_markup=listing_flow.book_markup(name, listing["id"]),
+            )
+        except TelegramError as e:
+            if "not modified" not in str(e).lower():
+                log.warning("Could not refresh channel card for listing %s: %s", listing["id"], e)
+        await asyncio.sleep(1)
+
+
 async def on_startup(app: Application) -> None:
     db.init_db()
     await check_health()
+    if roles.is_host():
+        asyncio.create_task(refresh_cards(app))
 
 
 def build_app(token: str) -> Application:
@@ -66,6 +91,8 @@ def build_app(token: str) -> Application:
     if roles.is_host():
         app.add_handler(listing_flow.conversation)
         app.add_handler(chat.host_conversation)
+        for handler in edit_post.handlers:
+            app.add_handler(handler)
         for handler in manage.handlers + payments.host_handlers:
             app.add_handler(handler)
     else:

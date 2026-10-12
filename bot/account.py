@@ -62,7 +62,17 @@ async def show_bookings(message: Message) -> None:
         await message.reply_text("\U0001F4ED You have no upcoming bookings. Pick a place from the channel to book one.")
         return
     if sections:
-        await message.reply_text("\n\n".join(sections), parse_mode=ParseMode.HTML)
+        # One "message the host" button per place the renter has an upcoming booking at.
+        seen, ask = set(), []
+        for r in rows:
+            if r["listing_id"] not in seen and len(ask) < MAX_SHOWN:
+                seen.add(r["listing_id"])
+                ask.append([InlineKeyboardButton(f"\U0001F4AC Message host: {r['location']}"[:60], callback_data=f"q:{r['listing_id']}")])
+        await message.reply_text(
+            "\n\n".join(sections),
+            parse_mode=ParseMode.HTML,
+            reply_markup=InlineKeyboardMarkup(ask) if ask else None,
+        )
     if to_review:
         await message.reply_text(
             "\u2B50 How were your stays? Tap one to leave a review:",

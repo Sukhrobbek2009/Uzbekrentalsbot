@@ -26,7 +26,12 @@ def card_markup(listing) -> InlineKeyboardMarkup:
         if listing["status"] == "active"
         else InlineKeyboardButton("\u25B6\uFE0F Reactivate", callback_data=f"mg:on:{listing['id']}")
     )
-    return InlineKeyboardMarkup([[first, InlineKeyboardButton("\U0001F5D1 Delete", callback_data=f"mg:del:{listing['id']}")]])
+    return InlineKeyboardMarkup(
+        [
+            [InlineKeyboardButton("\u270F\uFE0F Edit", callback_data=f"ed:{listing['id']}")],
+            [first, InlineKeyboardButton("\U0001F5D1 Delete", callback_data=f"mg:del:{listing['id']}")],
+        ]
+    )
 
 
 async def sync_channel(context: ContextTypes.DEFAULT_TYPE, listing, state: str) -> bool:
@@ -64,7 +69,7 @@ async def show_listings(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
     if not listings:
         await update.message.reply_text("You have no active or inactive listings. Tap Post to create one.")
         return
-    await update.message.reply_text("Your listings. Deactivate hides one from renters; Delete removes it.")
+    await update.message.reply_text("Your listings. Edit changes the details, Deactivate hides one from renters, Delete removes it.")
     for listing in listings:
         await update.message.reply_photo(
             listing["photo_file_id"], caption=card_text(listing), reply_markup=card_markup(listing)

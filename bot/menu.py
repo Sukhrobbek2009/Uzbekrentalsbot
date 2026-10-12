@@ -10,7 +10,7 @@ from telegram.ext import (
     filters,
 )
 
-from bot import account, booking, db, labels, manage, panels, payments, roles
+from bot import account, booking, db, labels, manage, panels, payments, reviews, roles
 from bot.keyboards import menu_keyboard, phone_keyboard
 from bot.search import begin_search
 
@@ -52,6 +52,13 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
             return NAME
         else:
             await booking.start_booking(update.message, int(arg[5:]))
+        return ConversationHandler.END
+
+    if arg.startswith("reviews_") and arg[8:].isdigit():
+        if roles.is_host():
+            await update.message.reply_text("To read or leave reviews, please open the renter bot from the channel card.")
+        else:
+            await reviews.show_reviews(update.message, int(arg[8:]))
         return ConversationHandler.END
 
     user = db.get_user(update.effective_chat.id)

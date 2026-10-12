@@ -159,6 +159,7 @@ async def begin_pay(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     await query.message.reply_text(
         instructions(b, owner) + note + "\n\n\U0001F4F8 Send the screenshot now, or /cancel to stop.",
         parse_mode=ParseMode.HTML,
+        reply_markup=InlineKeyboardMarkup([[ask_host_button(b["listing_id"])]]),
     )
     return PROOF
 
@@ -225,6 +226,7 @@ async def cancel_pay(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
 
 pay_conversation = ConversationHandler(
     entry_points=[CallbackQueryHandler(begin_pay, pattern=r"^pay:\d+$")],
+    allow_reentry=True,
     states={
         PROOF: [
             MessageHandler(filters.PHOTO | filters.Document.IMAGE, got_proof),
@@ -324,6 +326,7 @@ async def on_confirm(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
         f"✅ <b>Payment confirmed!</b>\n"
         f"\U0001F4C5 {html.escape(b['location'])} - {b['day']} at {b['slot']}\n"
         f"\U0001F4DE Host contact: {html.escape(b['listing_phone'])}",
+        InlineKeyboardMarkup([[ask_host_button(b["listing_id"])]]),
     )
 
 
@@ -383,6 +386,7 @@ async def cancel_reject(update: Update, context: ContextTypes.DEFAULT_TYPE) -> i
 
 reject_conversation = ConversationHandler(
     entry_points=[CallbackQueryHandler(begin_reject, pattern=r"^rv:no:\d+$")],
+    allow_reentry=True,
     states={REASON: [MessageHandler(text_only, got_reason)]},
     fallbacks=[
         CommandHandler("cancel", cancel_reject),

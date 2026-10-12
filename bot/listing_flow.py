@@ -144,12 +144,13 @@ def caption_for(listing) -> str:
         stars = "\u2B50" * round(average)
         lines.append(f"{stars} <b>{average:.1f}</b> ({count} review{'s' if count != 1 else ''})")
     lines.append(f"\U0001F4DE {html.escape(listing['phone'])}")
+    # Up to three recent written reviews live on the card itself.
+    if count:
+        for r in [r for r in db.recent_reviews(listing["id"], 6) if r["comment"]][:3]:
+            text = r["comment"] if len(r["comment"]) <= 90 else r["comment"][:89].rstrip() + "\u2026"
+            who = html.escape(r["name"].split()[0]) if r["name"] else "A renter"
+            lines.append(f"\U0001F4AC <i>\u201C{html.escape(text)}\u201D</i> - {who} {'\u2B50' * r['rating']}")
     # Keep the card under Telegram's caption limit by trimming the free text only.
-    quote = db.latest_review(listing["id"]) if count else None
-    if quote is not None:
-        text = quote["comment"] if len(quote["comment"]) <= 120 else quote["comment"][:119].rstrip() + "\u2026"
-        who = html.escape(quote["name"].split()[0]) if quote["name"] else "A renter"
-        lines.append(f"\U0001F4AC <i>\u201C{html.escape(text)}\u201D</i> - {who}")
     head = "\n".join(lines)
     room = CAPTION_LIMIT - len(head) - 4
     info = html.escape(listing["description"] or "")
@@ -159,8 +160,18 @@ def caption_for(listing) -> str:
 
 
 def book_markup(bot_username: str, listing_id: int) -> InlineKeyboardMarkup:
-    link = f"https://t.me/{bot_username}?start=book_{listing_id}"
-    return InlineKeyboardMarkup([[InlineKeyboardButton("\U0001F511 Book this", url=link)]])
+    """Channel card buttons: book, and read or leave reviews (both open the renter bot)."""
+    _, count = db.review_stats(listing_id)
+    reviews_label = f"\u2B50 Reviews ({count})" if count else "\u2B50 Reviews"
+    base = f"https://t.me/{bot_username}?start="
+    return InlineKeyboardMarkup(
+        [
+            [
+                InlineKeyboardButton("\U0001F511 Book this", url=base + f"book_{listing_id}"),
+                InlineKeyboardButton(reviews_label, url=base + f"reviews_{listing_id}"),
+            ]
+        ]
+    )
 
 
 async def post_to_channel(context: ContextTypes.DEFAULT_TYPE, listing_id: int):

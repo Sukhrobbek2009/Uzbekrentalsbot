@@ -85,6 +85,7 @@ async def ask_cancel(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
 
 renter_conversation = ConversationHandler(
     entry_points=[CallbackQueryHandler(ask_start, pattern=r"^q:\d+$")],
+    allow_reentry=True,
     states={TEXT: [MessageHandler(text_only, ask_send)]},
     fallbacks=[CommandHandler("cancel", ask_cancel), MessageHandler(filters.Regex(labels.MENU_REGEX), ask_cancel)],
 )
@@ -142,6 +143,7 @@ async def reply_cancel(update: Update, context: ContextTypes.DEFAULT_TYPE) -> in
 
 host_conversation = ConversationHandler(
     entry_points=[CallbackQueryHandler(reply_start, pattern=r"^hr:\d+:\d+$")],
+    allow_reentry=True,
     states={TEXT: [MessageHandler(text_only, reply_send)]},
     fallbacks=[CommandHandler("cancel", reply_cancel), MessageHandler(filters.Regex(labels.MENU_REGEX), reply_cancel)],
 )
