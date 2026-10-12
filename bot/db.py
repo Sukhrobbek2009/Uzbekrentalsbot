@@ -80,8 +80,11 @@ CREATE UNIQUE INDEX IF NOT EXISTS one_confirmed_slot
 def _connect() -> sqlite3.Connection:
     path = Path(os.environ.get("BOT_DB_PATH", "data/bot.db"))
     path.parent.mkdir(parents=True, exist_ok=True)
-    conn = sqlite3.connect(path)
+    conn = sqlite3.connect(path, timeout=10)
     conn.row_factory = sqlite3.Row
+    # Both bots (separate processes) use this file: WAL lets one write while the other reads.
+    conn.execute("PRAGMA journal_mode=WAL")
+    conn.execute("PRAGMA busy_timeout=10000")
     return conn
 
 
